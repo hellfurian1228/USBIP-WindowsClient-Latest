@@ -24,13 +24,14 @@
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QMenuBar>
+#include <QTcpSocket>
 #include "logwindow.h"
 #include <wtypes.h>
 #include <usbspec.h>
 
 namespace usbip { class UsbIds; }
 
-class AudioRelayManager;
+class NsdDiscoveryManager;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -48,17 +49,18 @@ private slots:
     void handleToggleLogWindow();
     void handleResetDeviceConnection(int row);
     void handleToggleDeviceAttach(int row);
-    void handleResetAudioSubsystem();
     void handleThemeChange(int index);
     void handleNewProfile();
     void handleProfileChange(const QString &profileName);
     void refreshTelemetryStats();
+    void handleNetworkDrop(const QString &busid);
+    void handleHostDiscovered(const QString &hostname, const QHostAddress &address, quint16 port);
 
 private:
     void setupUi();
     void applyTheme(const QString &themeName);
     QWidget* createNetworkTab();
-    QWidget* createAudioTab();
+
     QWidget* createSettingsTab();
     void addUsbDeviceToTable(const QString &name, const QString &busId, const QString &vidPid, const QString &status, bool attached, USB_DEVICE_SPEED detectedSpeed = UsbHighSpeed);
     bool validatePort(quint16 port);
@@ -85,14 +87,8 @@ private:
     QTableWidget *usbDeviceTable;
     QLabel *connectionStatusLabel;
     QLabel *highBandwidthWarningLabel;
+    QComboBox *discoveredHostCombo;
     QLabel *deviceDisconnectWarningLabel;
-
-    // Audio Tab Controls
-    QPushButton *enableAudioRelayButton;
-    QComboBox *audioInputDeviceCombo;
-    QComboBox *audioOutputDeviceCombo;
-    QComboBox *audioQualityCombo;
-    QPushButton *resetAudioButton;
 
     // Settings Tab Controls
     QComboBox *themeCombo;
@@ -112,11 +108,14 @@ private:
 
     // Maps busid -> vhci hub port number (>= 1) for currently attached devices
     QHash<QString, int> attachedPorts;
+    // Keepalive watchers: one QTcpSocket per attached busid, closed on drop
+    QHash<QString, QTcpSocket*> dropWatchers;
+    // Previous byte counts per busid for live throughput delta calculation
+    QHash<QString, quint64> previousBytes;
     QSystemTrayIcon *trayIcon;
     bool isExiting = false;
     QString currentProfile;
-    AudioRelayManager *audioRelayManager;
-    uint64_t lastTotalBytes = 0;
+    NsdDiscoveryManager *nsdDiscoveryManager;
 };
 
 #endif // MAINWINDOW_H

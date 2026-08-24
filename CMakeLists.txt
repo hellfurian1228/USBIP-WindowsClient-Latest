@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(USBIPClient VERSION 1.0.1 LANGUAGES CXX)
+project(USBIPClient VERSION 1.0.4 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,33 +7,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-# BRUTE FORCE THE PATH - No conditions, no exceptions
-set(CMAKE_PREFIX_PATH "C:/Qt/6.12.0/msvc2022_64" CACHE PATH "Force Qt6 Path" FORCE)
-
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
-find_package(Qt6 OPTIONAL_COMPONENTS Multimedia)
-
-# --- Opus codec (fetched from source) ---
-include(FetchContent)
-
-# Opus v1.4 declares cmake_minimum_required(3.1); newer CMake versions deprecate compatibility below 3.10.
-set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
-
-# Suppress CMP0048 (project() VERSION handling) triggered by old sub-projects.
-if(POLICY CMP0048)
-    cmake_policy(SET CMP0048 NEW)
-endif()
-
-FetchContent_Declare(
-    opus
-    GIT_REPOSITORY https://github.com/xiph/opus.git
-    GIT_TAG        v1.4
-    GIT_SHALLOW    TRUE
-)
-set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
-set(OPUS_BUILD_TESTING        OFF CACHE BOOL "" FORCE)
-set(OPUS_BUILD_PROGRAMS       OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(opus)
 
 # --- usbip-win2 user-mode SDK (built from source to avoid ABI mismatches) ---
 set(USBIP_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/usbip_sdk")
@@ -99,12 +73,13 @@ add_executable(USBIPClient
     mainwindow.h
     logwindow.cpp
     logwindow.h
-    audiorelaymanager.cpp
-    audiorelaymanager.h
     driverinstaller.cpp
     driverinstaller.h
-    src/audio/opus_transcoder.cpp
-    src/audio/opus_transcoder.h
+    nsddiscoverymanager.cpp
+    nsddiscoverymanager.h
+    src/transport/hybrid_udp_transport.cpp
+    src/transport/hybrid_udp_transport.h
+    src/usbip.rc
 )
 
 target_link_libraries(USBIPClient PRIVATE
@@ -113,7 +88,6 @@ target_link_libraries(USBIPClient PRIVATE
     Qt6::Widgets
     Qt6::Network
     usbip_sdk
-    opus
     setupapi
     newdev
 )
@@ -121,11 +95,6 @@ target_link_libraries(USBIPClient PRIVATE
 target_include_directories(USBIPClient PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
-
-if(TARGET Qt6::Multimedia)
-    target_link_libraries(USBIPClient PRIVATE Qt6::Multimedia)
-    target_compile_definitions(USBIPClient PRIVATE HAVE_QT_MULTIMEDIA)
-endif()
 
 # Self-elevation is handled programmatically in main.cpp, so no UAC manifest is needed here.
 
@@ -182,7 +151,7 @@ endif()
 # CPack Configuration
 set(CPACK_PACKAGE_NAME "USBIP Client")
 set(CPACK_PACKAGE_VENDOR "Tyler Long")
-set(CPACK_PACKAGE_VERSION "1.0.1")
+set(CPACK_PACKAGE_VERSION "1.0.4")
 set(CPACK_GENERATOR "NSIS")
 
 # NSIS Specifics
@@ -190,6 +159,8 @@ set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "USBIP Client")
 set(CPACK_NSIS_DISPLAY_NAME "USBIP Client")
 set(CPACK_NSIS_PACKAGE_NAME "USBIP Client")
+set(CPACK_NSIS_INSTALLED_ICON_NAME "USBIPClient.exe")
+set(CPACK_PACKAGE_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/usbip.ico")
 
 # Create desktop shortcut
 set(CPACK_NSIS_CREATE_ICONS_EXTRA "  CreateShortCut \\\"$DESKTOP\\\\USBIP Client.lnk\\\" \\\"$INSTDIR\\\\USBIPClient.exe\\\"")

@@ -1,6 +1,6 @@
 #include "mainwindow.h"
-#include "audiorelaymanager.h"
 #include "driverinstaller.h"
+#include "nsddiscoverymanager.h"
 #include <algorithm>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -27,28 +27,27 @@
 #include <dxgi.h>
 #include <wincrypt.h>
 
-// usbip_sdk: vhci.h provides Handle/attach/detach, remote.h provides Socket/connect/enum_exportable_devices
 #include <vhci.h>
 #include <remote.h>
 #include "src/usbip_sdk/libusbip/src/usb_ids.h"
 #include "src/transport/usb_transport.h"
+#include "src/transport/hybrid_udp_transport.h"
 
 #pragma comment(lib, "netapi32.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "crypt32.lib")
 
-std::atomic<uint64_t> g_totalBytesTransferred{0};
-
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent) {
-    setWindowTitle("USBIP Client v1.0.1");
+    setWindowTitle("USBIP Client v1.0.4");
     resize(1000, 650);
 
     logWindow = new LogWindow(this);
-    audioRelayManager = new AudioRelayManager(this);
+    nsdDiscoveryManager = new NsdDiscoveryManager(this);
+    connect(nsdDiscoveryManager, &NsdDiscoveryManager::hostDiscovered,
+            this, &MainWindow::handleHostDiscovered);
 
     setupUi();
-
     loadSettings();
 
     QString driverError;
@@ -89,6 +88,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     logWindow->appendLog("INFO", "USBIP Client initialized successfully.");
 
+    nsdDiscoveryManager->startDiscovery();
+
     if (autoConnectCheckBox->isChecked()) {
         logWindow->appendLog("INFO", "Auto-connect enabled. Initiating startup connection...");
         handleConnect();
@@ -96,6 +97,7 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 MainWindow::~MainWindow() {
+    nsdDiscoveryManager->stopDiscovery();
     delete usbIdsDb;
 }
 
@@ -216,6 +218,15 @@ void MainWindow::setupUi() {
     loggerButton->setToolTip("Toggle the debug console to view application logs and errors.");
     connectionStatusLabel = new QLabel("Status: Disconnected", this);
 
+    discoveredHostCombo = new QComboBox(this);
+    discoveredHostCombo->setMinimumWidth(160);
+    discoveredHostCombo->setToolTip("Android hosts discovered via mDNS. Select one to populate the Host IP field.");
+    discoveredHostCombo->addItem("-- mDNS Hosts --");
+    connect(discoveredHostCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index > 0)
+            hostIpLineEdit->setText(discoveredHostCombo->itemData(index).toString());
+    });
+
     topBarLayout->addWidget(ipLabel);
     topBarLayout->addWidget(hostIpLineEdit);
     topBarLayout->addWidget(portLabel);
@@ -223,12 +234,12 @@ void MainWindow::setupUi() {
     topBarLayout->addWidget(connectButton);
     topBarLayout->addWidget(scanHostButton);
     topBarLayout->addWidget(connectionStatusLabel);
+    topBarLayout->addWidget(discoveredHostCombo);
     topBarLayout->addStretch();
     topBarLayout->addWidget(loggerButton);
 
     tabWidget = new QTabWidget(this);
     tabWidget->addTab(createNetworkTab(), "Network & USB/IP");
-    tabWidget->addTab(createAudioTab(), "Audio Relay");
     tabWidget->addTab(createSettingsTab(), "Settings");
 
     mainLayout->addLayout(topBarLayout);
@@ -366,78 +377,6 @@ void MainWindow::addUsbDeviceToTable(const QString &name, const QString &busId, 
         protocolCombo->setEnabled(false);
     }
     usbDeviceTable->setCellWidget(row, 7, protocolCombo);
-}
-
-QWidget* MainWindow::createAudioTab() {
-    QWidget *tab = new QWidget(this);
-    QVBoxLayout *layout = new QVBoxLayout(tab);
-
-    QGroupBox *audioGroup = new QGroupBox("Opus Audio Relay Engine", tab);
-    QFormLayout *formLayout = new QFormLayout(audioGroup);
-
-    enableAudioRelayButton = new QPushButton("Enable Audio Relay Stream", this);
-    enableAudioRelayButton->setCheckable(true);
-
-    audioInputDeviceCombo = new QComboBox(this);
-    audioInputDeviceCombo->addItems(audioRelayManager->getAvailableInputDevices());
-
-    audioOutputDeviceCombo = new QComboBox(this);
-    audioOutputDeviceCombo->addItems(audioRelayManager->getAvailableOutputDevices());
-
-    audioQualityCombo = new QComboBox(this);
-    audioQualityCombo->addItems({"Low Latency (64 kbps)", "Balanced (128 kbps)", "High Fidelity (256 kbps)"});
-    audioQualityCombo->setCurrentIndex(1);
-
-#ifndef HAVE_QT_MULTIMEDIA
-    audioInputDeviceCombo->setEnabled(false);
-    audioOutputDeviceCombo->setEnabled(false);
-    audioQualityCombo->setEnabled(false);
-    enableAudioRelayButton->setEnabled(false);
-    enableAudioRelayButton->setToolTip("Qt6 Multimedia module is missing. Audio relay is disabled.");
-#endif
-
-    resetAudioButton = new QPushButton("Reset Audio Subsystem", this);
-
-    formLayout->addRow("Relay State:", enableAudioRelayButton);
-    formLayout->addRow("Input Device:", audioInputDeviceCombo);
-    formLayout->addRow("Output Device:", audioOutputDeviceCombo);
-    formLayout->addRow("Preset Quality:", audioQualityCombo);
-    formLayout->addRow("Subsystem Recovery:", resetAudioButton);
-
-    layout->addWidget(audioGroup);
-    layout->addStretch();
-
-    connect(resetAudioButton, &QPushButton::clicked, this, &MainWindow::handleResetAudioSubsystem);
-
-    connect(enableAudioRelayButton, &QPushButton::toggled, this, [this](bool checked) {
-        if (checked) {
-            QString ipStr = hostIpLineEdit->text().trimmed();
-            QHostAddress targetIp(ipStr);
-            if (targetIp.isNull()) {
-                logWindow->appendLog("ERROR", "Invalid Host IP address for Audio Relay.");
-                enableAudioRelayButton->setChecked(false);
-                return;
-            }
-
-            const int bitrateTable[] = {64000, 128000, 256000};
-            int bitrate = bitrateTable[std::clamp(audioQualityCombo->currentIndex(), 0, 2)];
-
-#ifdef HAVE_QT_MULTIMEDIA
-            QAudioDevice inputDevice = audioRelayManager->findInputDevice(audioInputDeviceCombo->currentText());
-            QAudioDevice outputDevice = audioRelayManager->findOutputDevice(audioOutputDeviceCombo->currentText());
-
-            logWindow->appendLog("INFO", QString("Starting Opus Audio Relay: Streaming to %1:48100, Receiving on port 48100...").arg(ipStr));
-
-            audioRelayManager->startStreaming(inputDevice, targetIp, 48100, 48000, 2, bitrate);
-            audioRelayManager->startReceiving(outputDevice, 48100);
-#endif
-        } else {
-            logWindow->appendLog("INFO", "Stopping Audio Relay.");
-            audioRelayManager->stopAll();
-        }
-    });
-
-    return tab;
 }
 
 QWidget* MainWindow::createSettingsTab() {
@@ -634,6 +573,7 @@ void MainWindow::handleToggleDeviceAttach(int row) {
             }
 
             attachedPorts.remove(busid);
+            if (auto *w = dropWatchers.take(busid)) { w->disconnectFromHost(); w->deleteLater(); }
             if (row < usbDeviceTable->rowCount()) {
                 usbDeviceTable->item(row, 4)->setText("Available");
                 btn->setText("Attach");
@@ -662,25 +602,35 @@ void MainWindow::handleToggleDeviceAttach(int row) {
         location.busid    = busid.toStdString();
 
         QString speedText = speedCombo ? speedCombo->currentText() : "Default";
-        logWindow->appendLog("INFO", QString("Attaching bus %1 (%2) from %2:%3...").arg(busid, speedText).arg(ip).arg(port));
+        logWindow->appendLog("INFO", QString("Attaching bus %1 (%2) from %3:%4...").arg(busid, speedText, ip, port));
 
         const auto transportMode = protocolCombo
             ? static_cast<usbip::transport::TransportMode>(protocolCombo->currentData().toInt())
             : usbip::transport::TransportMode::TCP;
         if (transportMode == usbip::transport::TransportMode::UDP) {
-            logWindow->appendLog("WARNING", "UDP transport is experimental and not yet implemented; falling back to TCP.");
+            logWindow->appendLog("INFO", "UDP transport selected: attempting hybrid TCP-handshake / UDP-data-plane.");
         }
         std::unique_ptr<usbip::transport::IUsbTransport> transport;
         if (transportMode == usbip::transport::TransportMode::UDP)
-            transport = std::make_unique<usbip::transport::UdpTransport>();
+            transport = std::make_unique<usbip::transport::HybridUdpTransport>();
         else
             transport = std::make_unique<usbip::transport::TcpTransport>();
 
-        // Capture VID:PID before attach in case we need to recover with a new bus ID
         QString vidPid;
         if (row < usbDeviceTable->rowCount()) {
             QTableWidgetItem *vpItem = usbDeviceTable->item(row, 2);
             if (vpItem) vidPid = vpItem->text();
+        }
+
+        // Clear any stale VHCI port holding this busid to prevent Error 995
+        if (auto devicesOpt = usbip::vhci::get_imported_devices(dev.get())) {
+            for (const auto &imported : *devicesOpt) {
+                if (QString::fromStdString(imported.location.busid) == busid) {
+                    logWindow->appendLog("INFO", QString("Clearing stale port %1 for bus %2 before re-attach.").arg(imported.port).arg(busid));
+                    usbip::vhci::detach(dev.get(), imported.port);
+                    QThread::msleep(50); // Allow kernel VHCI driver time to finish async port release
+                }
+            }
         }
 
         int hubPort = transport->connect(dev.get(), location);
@@ -702,7 +652,6 @@ void MainWindow::handleToggleDeviceAttach(int row) {
                     if (hubPort >= 1) {
                         attachedPorts[newBusId] = hubPort;
                         logWindow->appendLog("INFO", QString("[Recovery] Successfully attached device on new Bus ID %1 (hub port %2).").arg(newBusId).arg(hubPort));
-                        // Update the table row to reflect the new bus ID
                         int newRow = -1;
                         for (int r = 0; r < usbDeviceTable->rowCount(); ++r) {
                             QTableWidgetItem *ni = usbDeviceTable->item(r, 1);
@@ -738,11 +687,70 @@ void MainWindow::handleToggleDeviceAttach(int row) {
             if (protocolCombo) protocolCombo->setEnabled(false);
         }
         logWindow->appendLog("INFO", QString("Attached bus %1 on hub port %2.").arg(busid).arg(hubPort));
+
+        auto *watcher = new QTcpSocket(this);
+        watcher->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
+        const QString capturedBusid = busid;
+        auto onDrop = [this, capturedBusid]() { handleNetworkDrop(capturedBusid); };
+        connect(watcher, &QAbstractSocket::disconnected, this, onDrop);
+        connect(watcher, &QAbstractSocket::errorOccurred, this, [onDrop](QAbstractSocket::SocketError) { onDrop(); });
+        watcher->connectToHost(ip, port.toUShort());
+        dropWatchers[busid] = watcher;
     } catch (const std::exception &ex) {
         logWindow->appendLog("ERROR", QString("SDK exception in attach/detach: %1").arg(ex.what()));
     }
 
     btn->setEnabled(true);
+}
+
+void MainWindow::handleHostDiscovered(const QString &hostname, const QHostAddress &address, quint16 port)
+{
+    Q_UNUSED(port);
+    const QString ip = address.toString();
+    const QString label = QStringLiteral("%1 (%2)").arg(hostname, ip);
+    for (int i = 1; i < discoveredHostCombo->count(); ++i) {
+        if (discoveredHostCombo->itemData(i).toString() == ip)
+            return;
+    }
+    discoveredHostCombo->addItem(label, ip);
+    logWindow->appendLog("INFO", QStringLiteral("mDNS: discovered host %1 at %2").arg(hostname, ip));
+}
+
+void MainWindow::handleNetworkDrop(const QString &busid)
+{
+    if (!attachedPorts.contains(busid))
+        return;
+
+    logWindow->appendLog("WARNING", QString("Network drop detected for bus %1 — forcing detach.").arg(busid));
+
+    if (auto *w = dropWatchers.take(busid)) {
+        w->blockSignals(true);
+        w->disconnectFromHost();
+        w->deleteLater();
+    }
+
+    const int hubPort = attachedPorts.take(busid);
+
+    usbip::Handle dev = usbip::vhci::open();
+    if (dev)
+        usbip::vhci::detach(dev.get(), hubPort);
+
+    for (int r = 0; r < usbDeviceTable->rowCount(); ++r) {
+        QTableWidgetItem *item = usbDeviceTable->item(r, 1);
+        if (!item || item->data(Qt::UserRole).toString() != busid)
+            continue;
+
+        usbDeviceTable->item(r, 4)->setText("Disconnected");
+        if (auto *btn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(r, 5))) {
+            btn->setText("Attach");
+            btn->setEnabled(true);
+        }
+        if (auto *sc = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(r, 3)))
+            sc->setEnabled(true);
+        if (auto *pc = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(r, 7)))
+            pc->setEnabled(true);
+        break;
+    }
 }
 
 void MainWindow::handleResetDeviceConnection(int row) {
@@ -774,7 +782,6 @@ void MainWindow::handleResetDeviceConnection(int row) {
                 if (auto *sc = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(row, 3)))
                     sc->setEnabled(true);
             }
-            // stale port cleared; fall through to re-attach
         } else {
             logWindow->appendLog("ERROR", QString("vhci::detach() failed for bus %1 (error %2).").arg(busid).arg(err));
             return;
@@ -810,11 +817,6 @@ void MainWindow::handleResetDeviceConnection(int row) {
             sc->setEnabled(false);
     }
     logWindow->appendLog("INFO", QString("Reset complete: bus %1 re-attached on hub port %2.").arg(busid).arg(newHubPort));
-}
-
-void MainWindow::handleResetAudioSubsystem() {
-    logWindow->appendLog("WARNING", "Resetting Audio Relay subsystem pipelines...");
-    enableAudioRelayButton->setChecked(false);
 }
 
 void MainWindow::handleThemeChange(int index) {
@@ -992,6 +994,8 @@ void MainWindow::syncDeviceStates() {
     }
 }
 
+quint64 g_totalBytesTransferred = 0;
+
 void MainWindow::refreshTelemetryStats() {
     syncDeviceStates();
 
@@ -1003,53 +1007,45 @@ void MainWindow::refreshTelemetryStats() {
     auto devicesOpt = usbip::vhci::get_imported_devices(dev.get());
     if (!devicesOpt) return;
 
-    uint64_t currentBytes = g_totalBytesTransferred.load();
-    uint64_t deltaBytes = currentBytes - lastTotalBytes;
-    lastTotalBytes = currentBytes;
-
-    QString throughputStr = "0 KB/s";
-    if (deltaBytes > 0) {
-        if (deltaBytes > 1024 * 1024) {
-            throughputStr = QString("%1 MB/s").arg(deltaBytes / (1024.0 * 1024.0), 0, 'f', 1);
-        } else {
-            throughputStr = QString("%1 KB/s").arg(deltaBytes / 1024.0, 0, 'f', 1);
-        }
-    }
-
     for (const auto &importedDev : *devicesOpt) {
         QString busId = QString::fromStdString(importedDev.location.busid);
-        
         int row = telemetryTable->rowCount();
         telemetryTable->insertRow(row);
-        
-        QString deviceName = "Unknown";
-        for (int i = 0; i < usbDeviceTable->rowCount(); ++i) {
-            if (usbDeviceTable->item(i, 1)->data(Qt::UserRole).toString() == busId) {
-                deviceName = usbDeviceTable->item(i, 1)->text();
-                break;
-            }
-        }
-        
+
+        QString deviceName = getFriendlyDeviceName(
+            static_cast<quint16>(importedDev.vendor),
+            static_cast<quint16>(importedDev.product));
+
         QString speedStr = "Unknown";
         switch (importedDev.speed) {
-            case UsbLowSpeed: speedStr = "Low (1.5 Mbps)"; break;
-            case UsbFullSpeed: speedStr = "Full (12 Mbps)"; break;
-            case UsbHighSpeed: speedStr = "High (480 Mbps)"; break;
-            case UsbSuperSpeed: speedStr = "Super (5 Gbps)"; break;
+            case UsbLowSpeed:  speedStr = "Low Speed (1.5 Mbps)";    break;
+            case UsbFullSpeed: speedStr = "Full Speed (12 Mbps)";    break;
+            case UsbHighSpeed: speedStr = "High Speed (480 Mbps)";   break;
+            case UsbSuperSpeed: speedStr = "SuperSpeed (5 Gbps)";    break;
             default: break;
         }
-        
-        QString devClass = "N/A";
-        QString jitter = "N/A (Bulk)";
-        
-        QString throughput = throughputStr; // Display global throughput for now, or divide by active devices
-        
+
+        QString throughputStr = "0 KB/s";
+        QString jitterStr    = "N/A";
+        QString devClass     = "N/A";
+
+        quint64 currentBytes = g_totalBytesTransferred;
+        quint64 prevBytes = previousBytes.value(busId, currentBytes);
+        quint64 delta = currentBytes > prevBytes ? currentBytes - prevBytes : 0;
+        previousBytes[busId] = currentBytes;
+
+        double bps = static_cast<double>(delta);
+        if (bps >= 1024.0 * 1024.0)
+            throughputStr = QString("%1 MB/s").arg(bps / (1024.0 * 1024.0), 0, 'f', 2);
+        else
+            throughputStr = QString("%1 KB/s").arg(bps / 1024.0, 0, 'f', 1);
+
         telemetryTable->setItem(row, 0, new QTableWidgetItem(busId));
         telemetryTable->setItem(row, 1, new QTableWidgetItem(deviceName));
         telemetryTable->setItem(row, 2, new QTableWidgetItem(speedStr));
         telemetryTable->setItem(row, 3, new QTableWidgetItem(devClass));
-        telemetryTable->setItem(row, 4, new QTableWidgetItem(jitter));
-        telemetryTable->setItem(row, 5, new QTableWidgetItem(throughput));
+        telemetryTable->setItem(row, 4, new QTableWidgetItem(jitterStr));
+        telemetryTable->setItem(row, 5, new QTableWidgetItem(throughputStr));
     }
 }
 
@@ -1061,7 +1057,6 @@ void MainWindow::clearDeviceTable() {
 
 QString MainWindow::getFreshBusId(const QString &targetVidPid) {
     if (targetVidPid.isEmpty()) return {};
-    // col 2 = VID:PID, busId stored in col 1's UserRole
     for (int row = 0; row < usbDeviceTable->rowCount(); ++row) {
         QTableWidgetItem *vpItem = usbDeviceTable->item(row, 2);
         if (vpItem && vpItem->text().compare(targetVidPid, Qt::CaseInsensitive) == 0) {
@@ -1071,4 +1066,3 @@ QString MainWindow::getFreshBusId(const QString &targetVidPid) {
     }
     return {};
 }
-
