@@ -9,19 +9,11 @@
 #include <QHeaderView>
 #include <QMessageBox>
 #include <QInputDialog>
-#include <QDataStream>
 #include <QCoreApplication>
 #include <QFile>
-#include <QDir>
-#include <QTextStream>
 #include <QMenuBar>
 #include <QStyle>
 #include <QThread>
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
-#include <QDesktopServices>
-#include <QUrl>
 #include <windows.h>
 #include <lm.h>
 #include <dxgi.h>
@@ -49,6 +41,27 @@ MainWindow::MainWindow(QWidget *parent)
 
     setupUi();
     loadSettings();
+
+    connectionMonitorTimer = new QTimer(this);
+    connectionMonitorTimer->setInterval(5000);
+    connect(connectionMonitorTimer, &QTimer::timeout, this, &MainWindow::checkHostConnection);
+
+    connectionProbeTimeoutTimer = new QTimer(this);
+    connectionProbeTimeoutTimer->setSingleShot(true);
+    connectionProbeTimeoutTimer->setInterval(2500);
+    connect(connectionProbeTimeoutTimer, &QTimer::timeout, this, [this]() {
+        if (!connectionProbeInProgress)
+            return;
+        connectionProbeInProgress = false;
+        connectionMonitorSocket->abort();
+        markHostDisconnected("Connection monitor timed out.");
+    });
+
+    connectionMonitorSocket = new QTcpSocket(this);
+    connect(connectionMonitorSocket, &QTcpSocket::connected,
+            this, &MainWindow::handleHostConnectionEstablished);
+    connect(connectionMonitorSocket, &QTcpSocket::errorOccurred,
+            this, &MainWindow::handleHostConnectionError);
 
     QString driverError;
     if (DriverInstaller::install(&driverError)) {
@@ -211,20 +224,30 @@ void MainWindow::setupUi() {
     portLineEdit->setFixedWidth(60);
 
     connectButton = new QPushButton("Connect", this);
-    connectButton->setToolTip("Establish a logical connection to the remote USB/IP host.");
+    connectButton->setToolTip("Verify the remote USB/IP host and connect.");
     scanHostButton = new QPushButton("Scan Host", this);
     scanHostButton->setToolTip("Query the host for available and exportable USB devices.");
     loggerButton = new QPushButton("Debug Console", this);
     loggerButton->setToolTip("Toggle the debug console to view application logs and errors.");
     connectionStatusLabel = new QLabel("Status: Disconnected", this);
 
+    QGroupBox *networkGroup = new QGroupBox("Network", this);
+    QHBoxLayout *networkLayout = new QHBoxLayout(networkGroup);
+    networkLayout->setContentsMargins(8, 4, 8, 4);
     discoveredHostCombo = new QComboBox(this);
     discoveredHostCombo->setMinimumWidth(160);
     discoveredHostCombo->setToolTip("Android hosts discovered via mDNS. Select one to populate the Host IP field.");
     discoveredHostCombo->addItem("-- mDNS Hosts --");
     connect(discoveredHostCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
-        if (index > 0)
-            hostIpLineEdit->setText(discoveredHostCombo->itemData(index).toString());
+        if (index <= 0)
+            return;
+
+        const QStringList endpoint = discoveredHostCombo->itemData(index).toString().split('|');
+        if (endpoint.size() != 2)
+            return;
+
+        hostIpLineEdit->setText(endpoint.at(0));
+        portLineEdit->setText(endpoint.at(1));
     });
 
     topBarLayout->addWidget(ipLabel);
@@ -238,22 +261,47 @@ void MainWindow::setupUi() {
     topBarLayout->addStretch();
     topBarLayout->addWidget(loggerButton);
 
+    QLabel *wifiLabel = new QLabel("Networks:", networkGroup);
+    wifiNetworkCombo = new QComboBox(this);
+    wifiNetworkCombo->setMinimumWidth(200);
+    wifiNetworkCombo->setToolTip("Select a visible Wi-Fi network.");
+    connect(wifiNetworkCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+                const bool connected = index >= 0 && index < wifiNetworks.size() &&
+                    wifiNetworks.at(index).connected;
+                const bool ethernet = index >= 0 && index < wifiNetworks.size() &&
+                    wifiNetworks.at(index).ethernet;
+                wifiConnectButton->setEnabled(index >= 0 && index < wifiNetworks.size() && !connected && !ethernet);
+                wifiDisconnectButton->setEnabled(connected && !ethernet);
+                if (index >= 0 && index < wifiNetworks.size()) {
+                    nsdDiscoveryManager->setInterfaceIndex(wifiNetworks.at(index).networkInterfaceIndex);
+                    discoveredHostCombo->setCurrentIndex(0);
+                    for (int hostIndex = discoveredHostCombo->count() - 1; hostIndex > 0; --hostIndex)
+                        discoveredHostCombo->removeItem(hostIndex);
+                    logWindow->appendLog("INFO", QString("Network selected: %1. mDNS restricted to this network.")
+                        .arg(wifiNetworks.at(index).ssid));
+                }
+            });
+    networkLayout->addWidget(wifiLabel);
+    networkLayout->addWidget(wifiNetworkCombo);
+    wifiScanButton = new QPushButton("Refresh", networkGroup);
+    wifiScanButton->setToolTip("Scan for available Wi-Fi networks.");
+    networkLayout->addWidget(wifiScanButton);
+    wifiConnectButton = new QPushButton("Connect", networkGroup);
+    wifiConnectButton->setToolTip("Connect to the selected Wi-Fi network.");
+    networkLayout->addWidget(wifiConnectButton);
+    wifiDisconnectButton = new QPushButton("Disconnect", networkGroup);
+    wifiDisconnectButton->setToolTip("Disconnect the selected Wi-Fi network.");
+    wifiDisconnectButton->setEnabled(false);
+    networkLayout->addWidget(wifiDisconnectButton);
+
     tabWidget = new QTabWidget(this);
     tabWidget->addTab(createNetworkTab(), "Network & USB/IP");
     tabWidget->addTab(createSettingsTab(), "Settings");
 
     mainLayout->addLayout(topBarLayout);
+    mainLayout->addWidget(networkGroup);
     mainLayout->addWidget(tabWidget);
-
-    highBandwidthWarningLabel = new QLabel("Note: A powered USB Hub and stable 5GHz WiFi or Ethernet connection are required for stable use of high-bandwidth devices (e.g., 3D scanners, cameras).", this);
-    highBandwidthWarningLabel->setObjectName("highBandwidthWarningLabel");
-    highBandwidthWarningLabel->setAlignment(Qt::AlignCenter);
-    mainLayout->addWidget(highBandwidthWarningLabel);
-
-    deviceDisconnectWarningLabel = new QLabel("Note: Disconnect attached devices from client before host to prevent errors.", this);
-    deviceDisconnectWarningLabel->setObjectName("deviceDisconnectWarningLabel");
-    deviceDisconnectWarningLabel->setAlignment(Qt::AlignCenter);
-    mainLayout->addWidget(deviceDisconnectWarningLabel);
 
     setCentralWidget(centralWidget);
 
@@ -276,6 +324,92 @@ void MainWindow::setupUi() {
     connect(connectButton, &QPushButton::clicked, this, &MainWindow::handleConnect);
     connect(scanHostButton, &QPushButton::clicked, this, &MainWindow::handleScanHost);
     connect(loggerButton, &QPushButton::clicked, this, &MainWindow::handleToggleLogWindow);
+    connect(wifiScanButton, &QPushButton::clicked, this, &MainWindow::handleWifiScan);
+    connect(wifiConnectButton, &QPushButton::clicked, this, &MainWindow::handleWifiConnect);
+    connect(wifiDisconnectButton, &QPushButton::clicked, this, [this]() {
+        const int index = wifiNetworkCombo->currentIndex();
+        if (index < 0 || index >= wifiNetworks.size())
+            return;
+        QString error;
+        if (wifiManager.disconnect(wifiNetworks.at(index).interfaceIndex, &error))
+            logWindow->appendLog("INFO", QString("Disconnected from Wi-Fi network '%1'.").arg(wifiNetworks.at(index).ssid));
+        else
+            logWindow->appendLog("ERROR", error);
+        QTimer::singleShot(1000, this, &MainWindow::handleWifiScan);
+    });
+    handleWifiScan();
+}
+
+void MainWindow::populateWifiNetworks()
+{
+    const QString selectedKey = wifiNetworkCombo->currentData().toString();
+    wifiNetworks = wifiManager.scan();
+    wifiNetworkCombo->blockSignals(true);
+    wifiNetworkCombo->clear();
+    for (const WifiNetwork &network : wifiNetworks) {
+        QString label = network.ssid;
+        label += QStringLiteral(" [%1]").arg(network.band);
+        if (network.ethernet) label += " [Ethernet]";
+        else if (network.secured) label += " [Secured]";
+        if (network.saved && !network.ethernet) label += " [Saved]";
+        if (network.connected) label += " [Connected]";
+        wifiNetworkCombo->addItem(label);
+        wifiNetworkCombo->setItemData(wifiNetworkCombo->count() - 1,
+            QStringLiteral("%1|%2").arg(network.networkInterfaceIndex).arg(network.ssid));
+    }
+    int restoredIndex = wifiNetworkCombo->findData(selectedKey);
+    if (restoredIndex >= 0)
+        wifiNetworkCombo->setCurrentIndex(restoredIndex);
+    wifiNetworkCombo->blockSignals(false);
+    const int selectedIndex = wifiNetworkCombo->currentIndex();
+    const bool wifiConnected = selectedIndex >= 0 && selectedIndex < wifiNetworks.size() &&
+        wifiNetworks.at(selectedIndex).connected;
+    const bool ethernet = selectedIndex >= 0 && selectedIndex < wifiNetworks.size() &&
+        wifiNetworks.at(selectedIndex).ethernet;
+    wifiConnectButton->setEnabled(!wifiConnected && !ethernet && !wifiNetworks.isEmpty());
+    wifiDisconnectButton->setEnabled(wifiConnected && !ethernet);
+    if (selectedIndex >= 0 && selectedIndex < wifiNetworks.size())
+        nsdDiscoveryManager->setInterfaceIndex(wifiNetworks.at(selectedIndex).networkInterfaceIndex);
+    if (wifiNetworks.isEmpty())
+        wifiNetworkCombo->addItem("No Wi-Fi networks found");
+}
+
+void MainWindow::handleWifiScan()
+{
+    wifiScanButton->setEnabled(false);
+    populateWifiNetworks();
+    wifiScanButton->setEnabled(true);
+    logWindow->appendLog("INFO", QString("Wi-Fi scan complete: %1 network(s) found.").arg(wifiNetworks.size()));
+}
+
+void MainWindow::handleWifiConnect()
+{
+    const int index = wifiNetworkCombo->currentIndex();
+    if (index < 0 || index >= wifiNetworks.size()) {
+        logWindow->appendLog("ERROR", "Select a Wi-Fi network before connecting.");
+        return;
+    }
+
+    const WifiNetwork network = wifiNetworks.at(index);
+    QString password;
+    if (network.secured && !network.saved) {
+        bool accepted = false;
+        password = QInputDialog::getText(this, "Wi-Fi Password",
+            QString("Enter the password for %1:").arg(network.ssid),
+            QLineEdit::Password, QString(), &accepted);
+        if (!accepted)
+            return;
+    }
+
+    QString error;
+    wifiConnectButton->setEnabled(false);
+    if (wifiManager.connect(network, password, &error)) {
+        logWindow->appendLog("INFO", QString("Connecting to Wi-Fi network '%1'.").arg(network.ssid));
+        QTimer::singleShot(3000, this, &MainWindow::handleWifiScan);
+    } else {
+        logWindow->appendLog("ERROR", error);
+    }
+    wifiConnectButton->setEnabled(true);
 }
 
 QWidget* MainWindow::createNetworkTab() {
@@ -424,6 +558,10 @@ void MainWindow::handleConnect() {
     }
 
     if (isLogicallyConnected) {
+        connectionMonitorTimer->stop();
+        connectionProbeTimeoutTimer->stop();
+        connectionProbeInProgress = false;
+        connectionMonitorSocket->abort();
         isLogicallyConnected = false;
         connectButton->setText("Connect");
         connectionStatusLabel->setText("Status: Disconnected");
@@ -432,12 +570,83 @@ void MainWindow::handleConnect() {
         return;
     }
 
+    logWindow->appendLog("INFO", QString("Checking USB/IP host %1:%2...").arg(ip).arg(port));
+    if (!probeHost(ip, port)) {
+        logWindow->appendLog("ERROR", QString("Cannot reach USB/IP host %1:%2. Check the host address and firewall (TCP %3).").arg(ip).arg(port).arg(port));
+        return;
+    }
+
     isLogicallyConnected = true;
     connectButton->setText("Disconnect");
-    connectionStatusLabel->setText("<font color='green'>Status: Connected (Logical)</font>");
+    connectionStatusLabel->setText("<font color='green'>Status: Connected</font>");
     connectionStatusLabel->setStyleSheet("font-weight: bold;");
-    logWindow->appendLog("INFO", QString("Connected to %1:%2 in UI-only mode.").arg(ip).arg(port));
+    logWindow->appendLog("INFO", QString("Connected to %1:%2.").arg(ip).arg(port));
+    connectionMonitorTimer->start();
     saveSettings();
+}
+
+void MainWindow::checkHostConnection()
+{
+    if (!isLogicallyConnected || connectionProbeInProgress)
+        return;
+
+    bool ok = false;
+    const quint16 port = portLineEdit->text().trimmed().toUShort(&ok);
+    if (!ok || !validatePort(port)) {
+        markHostDisconnected("Connection monitor found an invalid host endpoint.");
+        return;
+    }
+
+    connectionProbeInProgress = true;
+    connectionMonitorSocket->abort();
+    connectionMonitorSocket->connectToHost(hostIpLineEdit->text().trimmed(), port);
+    connectionProbeTimeoutTimer->start();
+}
+
+void MainWindow::handleHostConnectionEstablished()
+{
+    if (!connectionProbeInProgress)
+        return;
+
+    connectionProbeTimeoutTimer->stop();
+    connectionProbeInProgress = false;
+    connectionMonitorSocket->disconnectFromHost();
+}
+
+void MainWindow::handleHostConnectionError(QAbstractSocket::SocketError error)
+{
+    Q_UNUSED(error);
+    if (!connectionProbeInProgress)
+        return;
+
+    connectionProbeTimeoutTimer->stop();
+    connectionProbeInProgress = false;
+    markHostDisconnected(QString("Connection monitor error: %1.").arg(connectionMonitorSocket->errorString()));
+}
+
+void MainWindow::markHostDisconnected(const QString &reason)
+{
+    if (!isLogicallyConnected)
+        return;
+
+    connectionMonitorTimer->stop();
+    isLogicallyConnected = false;
+    connectButton->setText("Connect");
+    connectionStatusLabel->setText("Status: Disconnected");
+    connectionStatusLabel->setStyleSheet("color: #ff3366; font-weight: bold;");
+    logWindow->appendLog("WARNING", QString("Host connection lost. %1").arg(reason));
+}
+
+bool MainWindow::probeHost(const QString &ip, quint16 port)
+{
+    QTcpSocket socket;
+    socket.connectToHost(ip, port);
+    if (!socket.waitForConnected(3000)) {
+        socket.abort();
+        return false;
+    }
+    socket.disconnectFromHost();
+    return true;
 }
 
 void MainWindow::handleScanHost() {
@@ -450,6 +659,11 @@ void MainWindow::handleScanHost() {
     bool ok = false;
     quint16 port = portLineEdit->text().toUShort(&ok);
     if (!ok || !validatePort(port)) {
+        return;
+    }
+
+    if (!probeHost(ip, port)) {
+        logWindow->appendLog("ERROR", QString("Scan aborted: %1:%2 is unreachable (TCP timeout). Verify the host IP and firewall.").arg(ip).arg(port));
         return;
     }
 
@@ -588,6 +802,13 @@ void MainWindow::handleToggleDeviceAttach(int row) {
         // Attach path
         QString ip   = hostIpLineEdit->text().trimmed();
         QString port = portLineEdit->text().trimmed();
+        bool portOk = false;
+        const quint16 portNumber = port.toUShort(&portOk);
+        if (!portOk || !validatePort(portNumber) || !probeHost(ip, portNumber)) {
+            logWindow->appendLog("ERROR", QString("Attach aborted: USB/IP host %1:%2 is unreachable. Verify the host IP and firewall.").arg(ip, port));
+            btn->setEnabled(true);
+            return;
+        }
 
         usbip::Handle dev = usbip::vhci::open();
         if (!dev) {
@@ -703,17 +924,36 @@ void MainWindow::handleToggleDeviceAttach(int row) {
     btn->setEnabled(true);
 }
 
-void MainWindow::handleHostDiscovered(const QString &hostname, const QHostAddress &address, quint16 port)
+void MainWindow::handleHostDiscovered(const QString &hostname, const QHostAddress &address, quint16 port, int interfaceIndex)
 {
-    Q_UNUSED(port);
     const QString ip = address.toString();
-    const QString label = QStringLiteral("%1 (%2)").arg(hostname, ip);
+    const QString label = QStringLiteral("%1 (%2:%3)").arg(hostname, ip).arg(port);
+    const QString hostKey = QStringLiteral("%1|%2").arg(hostname).arg(interfaceIndex);
     for (int i = 1; i < discoveredHostCombo->count(); ++i) {
-        if (discoveredHostCombo->itemData(i).toString() == ip)
+        if (discoveredHostCombo->itemData(i, Qt::UserRole + 1).toString() != hostKey)
+            continue;
+
+        const QString oldEndpoint = discoveredHostCombo->itemData(i).toString();
+        const QString newEndpoint = QStringLiteral("%1|%2").arg(ip).arg(port);
+        if (oldEndpoint == newEndpoint)
             return;
+
+        discoveredHostCombo->setItemText(i, label);
+        discoveredHostCombo->setItemData(i, newEndpoint, Qt::UserRole);
+        logWindow->appendLog("INFO", QStringLiteral("mDNS: host %1 changed endpoint from %2 to %3:%4")
+            .arg(hostname, oldEndpoint.section('|', 0, 0), ip).arg(port));
+
+        if (discoveredHostCombo->currentIndex() == i) {
+            hostIpLineEdit->setText(ip);
+            portLineEdit->setText(QString::number(port));
+            logWindow->appendLog("INFO", QStringLiteral("Updated active host endpoint to %1:%2 from mDNS.").arg(ip).arg(port));
+        }
+        return;
     }
-    discoveredHostCombo->addItem(label, ip);
-    logWindow->appendLog("INFO", QStringLiteral("mDNS: discovered host %1 at %2").arg(hostname, ip));
+    const int index = discoveredHostCombo->count();
+    discoveredHostCombo->addItem(label, QStringLiteral("%1|%2").arg(ip).arg(port));
+    discoveredHostCombo->setItemData(index, hostKey, Qt::UserRole + 1);
+    logWindow->appendLog("INFO", QStringLiteral("mDNS: discovered host %1 at %2:%3").arg(hostname, ip).arg(port));
 }
 
 void MainWindow::handleNetworkDrop(const QString &busid)
@@ -869,8 +1109,6 @@ void MainWindow::applyTheme(const QString &themeName) {
             "QTableWidget { background-color: #0d0e15; gridline-color: #23273a; color: #ffffff; }"
             "QHeaderView::section { background-color: #12141d; color: #00f2fe; border: 1px solid #23273a; padding: 4px; }"
             "QLabel, QCheckBox { color: #e0e6ed; }"
-            "QLabel#highBandwidthWarningLabel { color: #ffaa00; font-size: 11px; padding: 6px; background-color: #1a1d2e; border-top: 1px solid #23273a; }"
-            "QLabel#deviceDisconnectWarningLabel { color: #ffaa00; font-size: 11px; padding: 2px 6px 6px 6px; background-color: #1a1d2e; }"
         );
     } else if (themeName == "Light") {
         setStyleSheet(
@@ -887,8 +1125,6 @@ void MainWindow::applyTheme(const QString &themeName) {
             "QTableWidget { background-color: #ffffff; gridline-color: #cbd5e1; color: #0f172a; }"
             "QHeaderView::section { background-color: #f8fafc; color: #2563eb; border: 1px solid #cbd5e1; padding: 4px; }"
             "QLabel, QCheckBox { color: #0f172a; }"
-            "QLabel#highBandwidthWarningLabel { color: #b45309; font-size: 11px; padding: 6px; background-color: #ffffff; border-top: 1px solid #cbd5e1; }"
-            "QLabel#deviceDisconnectWarningLabel { color: #b45309; font-size: 11px; padding: 2px 6px 6px 6px; background-color: #ffffff; }"
         );
     } else if (themeName == "High Contrast") {
         setStyleSheet(
@@ -905,8 +1141,6 @@ void MainWindow::applyTheme(const QString &themeName) {
             "QTableWidget { background-color: #000000; gridline-color: #ffffff; color: #ffffff; }"
             "QHeaderView::section { background-color: #000000; color: #ffff00; border: 2px solid #ffffff; padding: 4px; }"
             "QLabel, QCheckBox { color: #ffffff; }"
-            "QLabel#highBandwidthWarningLabel { color: #ffff00; font-size: 11px; padding: 6px; background-color: #000000; border-top: 2px solid #ffffff; }"
-            "QLabel#deviceDisconnectWarningLabel { color: #ffff00; font-size: 11px; padding: 2px 6px 6px 6px; background-color: #000000; }"
         );
     }
 }
@@ -994,8 +1228,6 @@ void MainWindow::syncDeviceStates() {
     }
 }
 
-quint64 g_totalBytesTransferred = 0;
-
 void MainWindow::refreshTelemetryStats() {
     syncDeviceStates();
 
@@ -1029,17 +1261,6 @@ void MainWindow::refreshTelemetryStats() {
         QString jitterStr    = "N/A";
         QString devClass     = "N/A";
 
-        quint64 currentBytes = g_totalBytesTransferred;
-        quint64 prevBytes = previousBytes.value(busId, currentBytes);
-        quint64 delta = currentBytes > prevBytes ? currentBytes - prevBytes : 0;
-        previousBytes[busId] = currentBytes;
-
-        double bps = static_cast<double>(delta);
-        if (bps >= 1024.0 * 1024.0)
-            throughputStr = QString("%1 MB/s").arg(bps / (1024.0 * 1024.0), 0, 'f', 2);
-        else
-            throughputStr = QString("%1 KB/s").arg(bps / 1024.0, 0, 'f', 1);
-
         telemetryTable->setItem(row, 0, new QTableWidgetItem(busId));
         telemetryTable->setItem(row, 1, new QTableWidgetItem(deviceName));
         telemetryTable->setItem(row, 2, new QTableWidgetItem(speedStr));
@@ -1052,7 +1273,6 @@ void MainWindow::refreshTelemetryStats() {
 void MainWindow::clearDeviceTable() {
     for (int i = usbDeviceTable->rowCount() - 1; i >= 0; --i)
         usbDeviceTable->removeRow(i);
-    usbDeviceTable->clearContents();
 }
 
 QString MainWindow::getFreshBusId(const QString &targetVidPid) {

@@ -118,9 +118,12 @@ auto set_options(_Inout_ set_last_error &last, _In_ SOCKET s)
 	enum { 
 		timeout = std::chrono::milliseconds(30s).count(),
 		interval = std::chrono::milliseconds(1s).count(),
+		io_timeout = std::chrono::milliseconds(5s).count(),
 	};
 
 	return  set_keepalive(last, s, timeout, interval) &&
+		do_setsockopt(last, s, SOL_SOCKET, SO_RCVTIMEO, io_timeout) &&
+		do_setsockopt(last, s, SOL_SOCKET, SO_SNDTIMEO, io_timeout) &&
 		set_nodelay(last, s);
 }
 

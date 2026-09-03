@@ -1,6 +1,6 @@
 [Setup]
 AppName=USBIP Client
-AppVersion=1.0.4
+AppVersion=1.0.5
 DefaultDirName={autopf}\USBIP Client
 DefaultGroupName=USBIP Client
 OutputBaseFilename=USBIPClient_Installer

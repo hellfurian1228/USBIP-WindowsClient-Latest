@@ -7,6 +7,19 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
+if(NOT DEFINED CMAKE_PREFIX_PATH AND NOT DEFINED Qt6_DIR)
+    # Check default Qt install directory if not explicitly provided
+    file(GLOB QT_CANDIDATE_DIRS LIST_DIRECTORIES true
+        "C:/Qt/6.*/msvc2022_64"
+        "C:/Qt/6.*/msvc2022_arm64"
+        "C:/Qt/6.*/mingw_64"
+    )
+    if(QT_CANDIDATE_DIRS)
+        list(GET QT_CANDIDATE_DIRS -1 LATEST_QT)
+        list(APPEND CMAKE_PREFIX_PATH "${LATEST_QT}")
+    endif()
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 # --- usbip-win2 user-mode SDK (built from source to avoid ABI mismatches) ---
@@ -17,7 +30,35 @@ file(GLOB USBIP_SDK_SOURCES CONFIGURE_DEPENDS
 )
 
 # Generate the message-table header referenced as <resources/messages.h>
-find_program(MC_EXECUTABLE mc REQUIRED)
+if(WIN32)
+    # The message compiler must run on the host build machine
+    if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "ARM64")
+        set(_MC_ARCH_HINTS "arm64" "x64" "x86")
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(_MC_ARCH_HINTS "x64" "x86")
+    else()
+        set(_MC_ARCH_HINTS "x86" "x64")
+    endif()
+
+    set(WIN_SDK_MC_PATHS "")
+    foreach(_ARCH ${_MC_ARCH_HINTS})
+        file(GLOB _PATHS "C:/Program Files (x86)/Windows Kits/10/bin/*/${_ARCH}")
+        list(APPEND WIN_SDK_MC_PATHS ${_PATHS})
+    endforeach()
+
+    find_program(MC_EXECUTABLE mc
+        HINTS
+            ${WIN_SDK_MC_PATHS}
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots;KitsRoot10]/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
+            "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots;KitsRoot10]/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x86"
+        NO_DEFAULT_PATH
+    )
+    if(NOT MC_EXECUTABLE)
+        find_program(MC_EXECUTABLE mc REQUIRED)
+    endif()
+else()
+    find_program(MC_EXECUTABLE mc REQUIRED)
+endif()
 
 set(USBIP_SDK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/usbip_sdk")
 
@@ -77,6 +118,8 @@ add_executable(USBIPClient
     driverinstaller.h
     nsddiscoverymanager.cpp
     nsddiscoverymanager.h
+    wifimanager.cpp
+    wifimanager.h
     src/transport/hybrid_udp_transport.cpp
     src/transport/hybrid_udp_transport.h
     src/usbip.rc
@@ -90,6 +133,8 @@ target_link_libraries(USBIPClient PRIVATE
     usbip_sdk
     setupapi
     newdev
+    wlanapi
+    ole32
 )
 
 target_include_directories(USBIPClient PRIVATE
@@ -102,13 +147,23 @@ set_target_properties(USBIPClient PROPERTIES
     WIN32_EXECUTABLE ON
 )
 
-# Deploy Qt dependencies using windeployqt post-build
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND "C:/Qt/6.12.0/msvc2022_64/bin/windeployqt.exe"
-        --no-compiler-runtime
-        --verbose 0
-        "$<TARGET_FILE:USBIPClient>"
+# Deploy Qt dependencies using windeployqt
+find_program(WINDEPLOYQT_EXECUTABLE windeployqt
+    HINTS
+        "${Qt6_DIR}/../../../bin"
+        "${Qt6_DIR}/../../bin"
+        "${CMAKE_PREFIX_PATH}/bin"
+        "C:/Qt/6.11.2/msvc2022_64/bin"
 )
+
+if(WINDEPLOYQT_EXECUTABLE)
+    add_custom_command(TARGET USBIPClient POST_BUILD
+        COMMAND "${WINDEPLOYQT_EXECUTABLE}"
+            --no-compiler-runtime
+            --verbose 0
+            "$<TARGET_FILE:USBIPClient>"
+    )
+endif()
 
 # Deploy the pre-signed kernel driver package next to the executable
 add_custom_command(TARGET USBIPClient POST_BUILD
@@ -133,14 +188,16 @@ install(TARGETS USBIPClient RUNTIME DESTINATION .)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/usb.ids" DESTINATION .)
 
 # Deploy Qt dependencies using windeployqt
-install(CODE "
-    execute_process(
-        COMMAND \"C:/Qt/6.12.0/msvc2022_64/bin/windeployqt.exe\"
-                --no-compiler-runtime
-                --verbose 0
-                \"\${CMAKE_INSTALL_PREFIX}/USBIPClient.exe\"
-    )
-")
+if(WINDEPLOYQT_EXECUTABLE)
+    install(CODE "
+        execute_process(
+            COMMAND \"${WINDEPLOYQT_EXECUTABLE}\"
+                    --no-compiler-runtime
+                    --verbose 0
+                    \"\${CMAKE_INSTALL_PREFIX}/USBIPClient.exe\"
+        )
+    ")
+endif()
 
 # Install MSVC runtime libraries
 include(InstallRequiredSystemLibraries)
@@ -151,7 +208,7 @@ endif()
 # CPack Configuration
 set(CPACK_PACKAGE_NAME "USBIP Client")
 set(CPACK_PACKAGE_VENDOR "Tyler Long")
-set(CPACK_PACKAGE_VERSION "1.0.4")
+set(CPACK_PACKAGE_VERSION "1.0.5")
 set(CPACK_GENERATOR "NSIS")
 
 # NSIS Specifics

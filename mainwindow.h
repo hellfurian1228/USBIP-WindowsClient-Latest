@@ -8,24 +8,20 @@
 #include <QTableWidget>
 #include <QDockWidget>
 #include <QComboBox>
-#include <QSlider>
-#include <QSpinBox>
 #include <QCheckBox>
 #include <QLabel>
 #include <QSettings>
 #include <QCloseEvent>
-#include <QMap>
-#include <QFileDialog>
-#include <QFileInfo>
 #include <QHash>
-#include <QFile>
 #include <QTimer>
-#include <QProcess>
 #include <QSystemTrayIcon>
-#include <QMenu>
-#include <QMenuBar>
 #include <QTcpSocket>
+#include <QHostAddress>
+#include <QByteArray>
+#include <QList>
+#include <QStringList>
 #include "logwindow.h"
+#include "wifimanager.h"
 #include <wtypes.h>
 #include <usbspec.h>
 
@@ -54,7 +50,12 @@ private slots:
     void handleProfileChange(const QString &profileName);
     void refreshTelemetryStats();
     void handleNetworkDrop(const QString &busid);
-    void handleHostDiscovered(const QString &hostname, const QHostAddress &address, quint16 port);
+    void handleHostDiscovered(const QString &hostname, const QHostAddress &address, quint16 port, int interfaceIndex);
+    void checkHostConnection();
+    void handleHostConnectionEstablished();
+    void handleHostConnectionError(QAbstractSocket::SocketError error);
+    void handleWifiScan();
+    void handleWifiConnect();
 
 private:
     void setupUi();
@@ -77,6 +78,9 @@ private:
     void clearDeviceTable();
     QString getFreshBusId(const QString &targetVidPid);
     void syncDeviceStates();
+    bool probeHost(const QString &ip, quint16 port);
+    void markHostDisconnected(const QString &reason);
+    void populateWifiNetworks();
 
     QTabWidget *tabWidget;
     QLineEdit *hostIpLineEdit;
@@ -86,9 +90,11 @@ private:
     QPushButton *loggerButton;
     QTableWidget *usbDeviceTable;
     QLabel *connectionStatusLabel;
-    QLabel *highBandwidthWarningLabel;
     QComboBox *discoveredHostCombo;
-    QLabel *deviceDisconnectWarningLabel;
+    QComboBox *wifiNetworkCombo;
+    QPushButton *wifiScanButton;
+    QPushButton *wifiConnectButton;
+    QPushButton *wifiDisconnectButton;
 
     // Settings Tab Controls
     QComboBox *themeCombo;
@@ -99,6 +105,10 @@ private:
     QDockWidget *telemetryDock;
     QTableWidget *telemetryTable;
     QTimer *telemetryUpdateTimer;
+    QTimer *connectionMonitorTimer;
+    QTimer *connectionProbeTimeoutTimer;
+    QTcpSocket *connectionMonitorSocket;
+    bool connectionProbeInProgress = false;
 
     LogWindow *logWindow;
     bool isLogicallyConnected = false;
@@ -111,11 +121,12 @@ private:
     // Keepalive watchers: one QTcpSocket per attached busid, closed on drop
     QHash<QString, QTcpSocket*> dropWatchers;
     // Previous byte counts per busid for live throughput delta calculation
-    QHash<QString, quint64> previousBytes;
     QSystemTrayIcon *trayIcon;
     bool isExiting = false;
     QString currentProfile;
     NsdDiscoveryManager *nsdDiscoveryManager;
+    WifiManager wifiManager;
+    QList<WifiNetwork> wifiNetworks;
 };
 
 #endif // MAINWINDOW_H
