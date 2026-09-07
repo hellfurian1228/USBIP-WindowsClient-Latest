@@ -4,6 +4,9 @@
 [![Status](https://img.shields.io/badge/Status-Release-green.svg?style=flat-square)](https://github.com/hellfurian1228/USBIP-WindowsClient)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg?style=flat-square&logo=paypal)](https://www.paypal.com/donate/?hosted_button_id=P3P43EXYJWRLC)
 
+## USBIP-WindowsClient
+A modern, Qt-based graphical user interface for the USB/IP protocol on Windows. This client allows you to easily connect to remote USB/IP servers, mount shared USB devices, and manage connections with a clean and intuitive interface.
+
 ## 📢 Project Update: The Future of the USB/IP Client
 This repository represents the final free, open-source version of the USB/IP Windows Client.
 
@@ -36,9 +39,6 @@ If you find this tool useful and want to support continued development, I utiliz
 [**Donate via Ko-Fi**](https://ko-fi.com/mizukos)
 
 ## Discord https://discord.gg/R2nfbS4K2
-
-## USBIP-WindowsClient
-A modern, Qt-based graphical user interface for the USB/IP protocol on Windows. This client allows you to easily connect to remote USB/IP servers, mount shared USB devices, and manage connections with a clean and intuitive interface.
 
 ## ✨ Features
 Intuitive GUI: Easily scan hosts, list available remote USB devices, and attach/detach them with a single click.
