@@ -1,13 +1,39 @@
 # USBIP-WindowsClient
 <img width="256" height="256" alt="usbip" src="https://github.com/user-attachments/assets/3d66d928-e987-4ec4-a350-59341a83051b" />
 
-[![Status](https://img.shields.io/badge/Status-Beta-orange.svg?style=flat-square)](https://github.com/hellfurian1228/USBIP-WindowsClient)
+[![Status](https://img.shields.io/badge/Status-Release-green.svg?style=flat-square)](https://github.com/hellfurian1228/USBIP-WindowsClient)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg?style=flat-square&logo=paypal)](https://www.paypal.com/donate/?hosted_button_id=P3P43EXYJWRLC)
+
+## 📢 Project Update: The Future of the USB/IP Client
+This repository represents the final free, open-source version of the USB/IP Windows Client.
+
+When I started this project, I stated that it would be a free solution, and I am honoring that promise. This existing open-source repository will always remain free and available to you on GitHub.
+
+I want to extend a massive thank you to everyone who has helped with testing, reporting bugs, and ensuring we could build a stable, functional, and truly free alternative to the other paid apps out there with their predatory, hardware-locked licensing!
+
+## 🚀 What's Next: Steam Release
+Moving forward, I will be continuing active development—adding new features, further optimizing the native C++ networking codebase, and refining the UI.
+
+To help cover the costs of development tools, testing hardware, and the sheer amount of time I invest in maintaining and expanding this protocol, the next evolution of this client app will be released as a fixed-price application on Steam.
+
+By purchasing the Steam version, you will get:
+
+Automatic Updates: Seamless background updates via Steam so you never have to manually download installers again.
+
+Dedicated Support: Priority troubleshooting for your specific hardware setups, drivers, and USB peripherals.
+
+Exclusive New Features: Access to all future quality-of-life improvements, UI overhauls, and advanced networking features.
+
+No Predatory Subscriptions: A flat, one-time fee for unlimited use. No recurring charges, and no hardware-locked licenses.
+
+Thank you for supporting this project and helping it grow from an experimental prototype into the robust, low-latency networking tool it is today!
 
 ## ☕ Support the Project
 If you find this tool useful and want to support continued development, I utilize subscription based software for code. Donations will go towards this. Thanks!
 
 [**Donate via PayPal**](https://www.paypal.com/donate/?hosted_button_id=P3P43EXYJWRLC)
+
+[**Donate via Ko-Fi**](https://ko-fi.com/mizukos)
 
 ## Discord https://discord.gg/R2nfbS4K2
 
@@ -84,3 +110,11 @@ view and clearing it does not delete the saved files.
 *   **C++:** Native Windows client and USB/IP protocol handling.
 *   **CMake:** Unified build system for native components.
 
+## 📜 Credits & Acknowledgements
+
+This project is built upon the foundational work of the global open-source community:
+
+*   **Takahiro Hirofuchi & the NAIST Research Team:** The original architects of the USB/IP protocol and researchers at the Nara Institute of Science and Technology.
+*   **The Linux Kernel Community:** For maintaining and improving the core USB/IP drivers within the mainline kernel.
+*   **cezanne (GitHub):** The creator of the `usbip-win` project, which successfully ported the Virtual Host Controller Interface (VHCI) to Windows.
+*   **USBIP-Win2 Community:** For the ongoing development of modern Windows drivers and clients that this host is designed to communicate with.
