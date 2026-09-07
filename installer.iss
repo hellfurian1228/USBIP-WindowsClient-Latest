@@ -1,6 +1,10 @@
 [Setup]
+#include "build\installer_version.iss"
 AppName=USBIP Client
-AppVersion=1.0.5
+AppVersion={#AppVersion}
+AppId={{8BFAF8D4-65E5-4D8A-A8C2-5A0A4D9D3D27}
+CloseApplications=yes
+RestartApplications=no
 DefaultDirName={autopf}\USBIP Client
 DefaultGroupName=USBIP Client
 OutputBaseFilename=USBIPClient_Installer

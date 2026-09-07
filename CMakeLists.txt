@@ -1,11 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
-project(USBIPClient VERSION 1.0.4 LANGUAGES CXX)
+project(USBIPClient VERSION 1.0.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
+
+if(MSVC)
+    add_compile_options(/Zc:__cplusplus)
+endif()
 
 if(NOT DEFINED CMAKE_PREFIX_PATH AND NOT DEFINED Qt6_DIR)
     # Check default Qt install directory if not explicitly provided
@@ -112,16 +116,19 @@ add_executable(USBIPClient
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    filelogger.cpp
+    filelogger.h
     logwindow.cpp
     logwindow.h
     driverinstaller.cpp
     driverinstaller.h
     nsddiscoverymanager.cpp
     nsddiscoverymanager.h
+    updatemanager.cpp
+    updatemanager.h
     wifimanager.cpp
     wifimanager.h
-    src/transport/hybrid_udp_transport.cpp
-    src/transport/hybrid_udp_transport.h
+    assets.qrc
     src/usbip.rc
 )
 
@@ -135,6 +142,10 @@ target_link_libraries(USBIPClient PRIVATE
     newdev
     wlanapi
     ole32
+)
+
+target_compile_definitions(USBIPClient PRIVATE
+    USBIP_CLIENT_VERSION="${PROJECT_VERSION}"
 )
 
 target_include_directories(USBIPClient PRIVATE
@@ -181,11 +192,19 @@ add_custom_command(TARGET USBIPClient POST_BUILD
 
 # --- Installation and Packaging Configuration ---
 
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/installer_version.iss.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/installer_version.iss"
+    @ONLY
+)
+
 # Install target executable
 install(TARGETS USBIPClient RUNTIME DESTINATION .)
 
 # Install usb.ids
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/usb.ids" DESTINATION .)
+
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Drivers" DESTINATION .)
 
 # Deploy Qt dependencies using windeployqt
 if(WINDEPLOYQT_EXECUTABLE)
@@ -208,7 +227,7 @@ endif()
 # CPack Configuration
 set(CPACK_PACKAGE_NAME "USBIP Client")
 set(CPACK_PACKAGE_VENDOR "Tyler Long")
-set(CPACK_PACKAGE_VERSION "1.0.5")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_GENERATOR "NSIS")
 
 # NSIS Specifics

@@ -17,12 +17,14 @@ public:
 private slots:
     void clearLogs();
     void copyLogs();
+    void applyFilter(const QString &filter);
 
 private:
     QTextEdit *logTextEdit;
     QComboBox *filterComboBox;
     QPushButton *clearButton;
     QPushButton *copyButton;
+    QList<QPair<QString, QString>> logEntries;
 };
 
 #endif // LOGWINDOW_H

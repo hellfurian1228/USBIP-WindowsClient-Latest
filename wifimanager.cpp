@@ -124,19 +124,33 @@ QList<WifiNetwork> WifiManager::scan() const
 
     for (DWORD interfaceIndex = 0; interfaceIndex < interfaces->dwNumberOfItems; ++interfaceIndex) {
         const WLAN_INTERFACE_INFO &interfaceInfo = interfaces->InterfaceInfo[interfaceIndex];
+        
+        // 1. Collect visible BSS entries, frequency bands, and security status
         QHash<QString, QSet<QString>> bandsBySsid;
+        QHash<QString, bool> securityBySsid;
         WLAN_BSS_LIST *bssList = nullptr;
         if (WlanGetNetworkBssList(client, &interfaceInfo.InterfaceGuid, nullptr,
                                   dot11_BSS_type_any, FALSE, nullptr, &bssList) == ERROR_SUCCESS) {
             for (DWORD bssIndex = 0; bssIndex < bssList->dwNumberOfItems; ++bssIndex) {
                 const WLAN_BSS_ENTRY &bss = bssList->wlanBssEntries[bssIndex];
+                const QString ssid = ssidToString(bss.dot11Ssid);
+                if (ssid.isEmpty())
+                    continue;
                 const QString band = bandForFrequency(bss.ulChCenterFrequency);
                 if (!band.isEmpty())
-                    bandsBySsid[ssidToString(bss.dot11Ssid)].insert(band);
+                    bandsBySsid[ssid].insert(band);
+                
+                const bool privacyEnabled = (bss.usCapabilityInformation & 0x0010) != 0;
+                if (privacyEnabled) {
+                    securityBySsid[ssid] = true;
+                } else if (!securityBySsid.contains(ssid)) {
+                    securityBySsid[ssid] = false;
+                }
             }
             WlanFreeMemory(bssList);
         }
 
+        // 2. Query current connection
         QString connectedSsid;
         WLAN_CONNECTION_ATTRIBUTES *connection = nullptr;
         DWORD connectionSize = 0;
@@ -149,30 +163,43 @@ QList<WifiNetwork> WifiManager::scan() const
             WlanFreeMemory(connection);
         }
 
-        WLAN_PROFILE_INFO_LIST *profiles = nullptr;
-        if (WlanGetProfileList(client, &interfaceInfo.InterfaceGuid, nullptr, &profiles) == ERROR_SUCCESS) {
-            for (DWORD profileIndex = 0; profileIndex < profiles->dwNumberOfItems; ++profileIndex) {
-                WifiNetwork network;
-                network.ssid = QString::fromWCharArray(profiles->ProfileInfo[profileIndex].strProfileName);
-                if (network.ssid.isEmpty())
-                    continue;
-                network.saved = true;
-                network.interfaceIndex = static_cast<int>(interfaceIndex);
-                const QString interfaceDescription = QString::fromWCharArray(interfaceInfo.strInterfaceDescription);
-                network.networkInterfaceIndex = qtInterfaceIndexForDescription(interfaceDescription);
-                network.connected = network.ssid == connectedSsid;
-                network.band = bandsBySsid.value(network.ssid).values().join(QStringLiteral(" / "));
-                if (network.band.isEmpty())
-                    network.band = QStringLiteral("Band unavailable");
-                networks.append(network);
-            }
-            WlanFreeMemory(profiles);
+        const QString interfaceDescription = QString::fromWCharArray(interfaceInfo.strInterfaceDescription);
+        const int netInterfaceIndex = qtInterfaceIndexForDescription(interfaceDescription);
+
+        // 3. Build network list from visible SSIDs in range
+        for (auto it = bandsBySsid.cbegin(); it != bandsBySsid.cend(); ++it) {
+            const QString &ssid = it.key();
+            WifiNetwork network;
+            network.ssid = ssid;
+            network.saved = hasSavedProfile(client, interfaceInfo.InterfaceGuid, ssid);
+            network.connected = (ssid == connectedSsid);
+            network.secured = securityBySsid.value(ssid, true);
+            network.interfaceIndex = static_cast<int>(interfaceIndex);
+            network.networkInterfaceIndex = netInterfaceIndex;
+            network.band = it.value().values().join(QStringLiteral(" / "));
+            if (network.band.isEmpty())
+                network.band = QStringLiteral("Band unavailable");
+            networks.append(network);
+        }
+
+        // Ensure the active connection is always listed even if temporarily missed by BSS scan
+        if (!connectedSsid.isEmpty() && !bandsBySsid.contains(connectedSsid)) {
+            WifiNetwork network;
+            network.ssid = connectedSsid;
+            network.saved = true;
+            network.connected = true;
+            network.secured = true;
+            network.interfaceIndex = static_cast<int>(interfaceIndex);
+            network.networkInterfaceIndex = netInterfaceIndex;
+            network.band = QStringLiteral("Band unavailable");
+            networks.append(network);
         }
     }
 
     WlanFreeMemory(interfaces);
     WlanCloseHandle(client, nullptr);
 
+    // 4. Enumerate Ethernet adapters
     for (const QNetworkInterface &networkInterface : QNetworkInterface::allInterfaces()) {
         const auto flags = networkInterface.flags();
         if (!flags.testFlag(QNetworkInterface::IsUp) ||

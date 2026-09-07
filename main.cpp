@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QString>
 #include "mainwindow.h"
+#include "filelogger.h"
 #include <windows.h>
 #include <shellapi.h>
 #include <win_socket.h>
@@ -34,6 +35,10 @@ int main(int argc, char *argv[]) {
     }
 
     QApplication app(argc, argv);
+    app.setApplicationName("USBIP Client");
+    app.setApplicationVersion(QStringLiteral(USBIP_CLIENT_VERSION));
+    FileLogger::initialize();
+    FileLogger::installQtMessageHandler();
     usbip::InitWinSock2 ws2; // required by usbip::connect() / enum_exportable_devices()
     MainWindow window;
     window.show();

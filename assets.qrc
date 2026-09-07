@@ -1,0 +1,5 @@
+<!DOCTYPE RCC><RCC version="1.0">
+    <qresource prefix="/themes">
+        <file alias="warpedskull-artwork.jpg">assets/warpedskull-artwork.jpg</file>
+    </qresource>
+</RCC>

@@ -15,7 +15,8 @@ public:
     void setInterfaceIndex(int interfaceIndex);
 
 signals:
-    void hostDiscovered(const QString &hostname, const QHostAddress &address, quint16 port, int interfaceIndex);
+    void hostDiscovered(const QString &hostname, const QHostAddress &address,
+                        quint16 port, quint16 telemetryPort, int interfaceIndex);
 
 private slots:
     void readPendingDatagrams();

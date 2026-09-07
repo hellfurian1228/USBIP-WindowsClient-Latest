@@ -112,6 +112,23 @@ auto set_keepalive(_Inout_ set_last_error &last, _In_ SOCKET s, _In_ ULONG timeo
 	return !err;
 }
 
+auto set_socket_buffers(_Inout_ set_last_error &last, _In_ SOCKET s, _In_ int send_buf, _In_ int recv_buf)
+{
+	const int send_bytes = send_buf;
+	const int recv_bytes = recv_buf;
+
+	const auto ok =
+		!setsockopt(s, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&send_bytes), sizeof(send_bytes)) &&
+		!setsockopt(s, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&recv_bytes), sizeof(recv_bytes));
+
+	if (!ok) {
+		last.error = WSAGetLastError();
+		libusbip::output("setsockopt(SO_SNDBUF/SO_RCVBUF) error {}", last.error);
+	}
+
+	return ok;
+}
+
 auto set_options(_Inout_ set_last_error &last, _In_ SOCKET s)
 {
 	using namespace std::chrono_literals;
@@ -119,9 +136,11 @@ auto set_options(_Inout_ set_last_error &last, _In_ SOCKET s)
 		timeout = std::chrono::milliseconds(30s).count(),
 		interval = std::chrono::milliseconds(1s).count(),
 		io_timeout = std::chrono::milliseconds(5s).count(),
+		socket_buffer_bytes = 2 * 1024 * 1024,
 	};
 
-	return  set_keepalive(last, s, timeout, interval) &&
+	return  set_socket_buffers(last, s, socket_buffer_bytes, socket_buffer_bytes) &&
+		set_keepalive(last, s, timeout, interval) &&
 		do_setsockopt(last, s, SOL_SOCKET, SO_RCVTIMEO, io_timeout) &&
 		do_setsockopt(last, s, SOL_SOCKET, SO_SNDTIMEO, io_timeout) &&
 		set_nodelay(last, s);
@@ -420,11 +439,11 @@ auto usbip::connect(_In_ const char *hostname, _In_ const char *service) -> Sock
 		} else if (!connect_by_name(sock.get(), host->c_str(), svc->c_str())) {
 			last.error = WSAGetLastError();
 			libusbip::output("WSAConnectByName(family={}) error {}", family, last.error);
-			break; // it makes no sense to try next family
+			continue;
 		} else if (setsockopt(sock.get(), SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0)) {
 			last.error = WSAGetLastError();
 			libusbip::output("setsockopt(SO_UPDATE_CONNECT_CONTEXT) error {}", last.error);
-			break;
+			continue;
 		} else {
 			return sock;
 		}

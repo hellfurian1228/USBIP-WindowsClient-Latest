@@ -1,0 +1,24 @@
+CompileFlags:
+  Add:
+    - -IC:/Qt/6.11.2/msvc2022_64/include
+    - -IC:/Qt/6.11.2/msvc2022_64/include/QtCore
+    - -IC:/Qt/6.11.2/msvc2022_64/include/QtGui
+    - -IC:/Qt/6.11.2/msvc2022_64/include/QtWidgets
+    - -IC:/Qt/6.11.2/msvc2022_64/include/QtNetwork
+    - -IC:/Qt/6.11.2/msvc2022_64/mkspecs/win32-msvc
+    - -Isrc
+    - -Isrc/usbip_sdk/include
+    - -Isrc/usbip_sdk/libusbip
+    - -Ibuild/generated/usbip_sdk
+    - -Ibuild/USBIPClient_autogen/include_Debug
+    - -DUSBIP_CLIENT_VERSION=\"1.0.5\"
+    - -DQT_CORE_LIB
+    - -DQT_GUI_LIB
+    - -DQT_WIDGETS_LIB
+    - -DQT_NETWORK_LIB
+    - -DUNICODE
+    - -D_UNICODE
+    - -DNOMINMAX
+    - -DWIN32_LEAN_AND_MEAN
+    - -DLIBUSBIP_STATIC
+    - -DUSBIP_EXPORTS
