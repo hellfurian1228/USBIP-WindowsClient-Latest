@@ -40,7 +40,7 @@ If you find this tool useful and want to support continued development, I utiliz
 
 [**Donate via Ko-Fi**](https://ko-fi.com/mizukos)
 
-## Discord https://discord.gg/R2nfbS4K2
+## Discord [https://discord.gg/R2nfbS4K2](https://discord.gg/PSnsk4xMHW)
 
 ## ✨ Features
 Intuitive GUI: Easily scan hosts, list available remote USB devices, and attach/detach them with a single click.
