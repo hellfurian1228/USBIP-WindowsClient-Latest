@@ -10,9 +10,9 @@ https://mizukos.itch.io/usbip
 A modern, Qt-based graphical user interface for the USB/IP protocol on Windows. This client allows you to easily connect to remote USB/IP servers, mount shared USB devices, and manage connections with a clean and intuitive interface.
 
 ## 📢 Project Update: The Future of the USB/IP Client
-This repository represents the final free, open-source version of the USB/IP Windows Client.
+This repository represents the final free version of the USB/IP Windows Client.
 
-When I started this project, I stated that it would be a free solution, and I am honoring that promise. This existing open-source repository will always remain free and available to you on GitHub.
+When I started this project, I stated that it would be a free solution, and I am honoring that promise. This existing version will remain free and available to you on GitHub.
 
 I want to extend a massive thank you to everyone who has helped with testing, reporting bugs, and ensuring we could build a stable, functional, and truly free alternative to the other paid apps out there with their predatory, hardware-locked licensing!
 
